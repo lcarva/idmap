@@ -15,7 +15,6 @@ Single file, standard library only (needs Python 3.10+):
 
 ```sh
 cp idmap ~/.local/bin/idmap    # anywhere on $PATH
-chmod +x ~/.local/bin/idmap
 ```
 
 The database is created on first use at `$IDMAP_DB`, or
@@ -62,31 +61,3 @@ idmap rm gitlab:alice-gl             # forget an identifier
 namespace, or a name that was never set) isn't known — convenient for shell
 callers.
 
-## Schema
-
-```sql
-CREATE TABLE entity (
-  id   INTEGER PRIMARY KEY,
-  name TEXT
-);
-CREATE TABLE identifier (
-  namespace TEXT NOT NULL,
-  handle    TEXT NOT NULL,
-  entity_id INTEGER NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
-  PRIMARY KEY (namespace, handle)
-);
-```
-
-## Using it from other tools
-
-Any script can treat LDAP/GitHub/etc. as ordinary namespaces. For example,
-resolving a Red Hat LDAP uid to a GitHub id becomes one offline call:
-
-```sh
-resolve_github_id() {
-  idmap get "ldap:$1" --ns github   # empty output + non-zero exit if unmapped
-}
-```
-
-Populate the store however you like (LDAP discovery, manual overrides, a CSV
-import); querying afterwards needs no network access.
