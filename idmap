@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""idmap — a local identity-correlation store.
+
+Maps identifiers from arbitrary namespaces (services) to a single canonical
+person. Namespaces are dynamic: they are just data, never schema. Start from
+any identifier and link more later.
+
+    idmap set github:alice ldap:asmith     # assert these name the same person
+    idmap set quay:alice-q github:alice     # attach a Quay handle to that person
+    idmap get ldap:asmith --ns github       # -> alice
+    idmap ls
+
+No network calls. Backed by a single SQLite file (see IDMAP_DB / --db).
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS entity (
+  id   INTEGER PRIMARY KEY,
+  name TEXT
+);
+CREATE TABLE IF NOT EXISTS identifier (
+  namespace TEXT NOT NULL,
+  handle    TEXT NOT NULL,
+  entity_id INTEGER NOT NULL REFERENCES entity(id) ON DELETE CASCADE,
+  PRIMARY KEY (namespace, handle)
+);
+CREATE INDEX IF NOT EXISTS idx_identifier_entity ON identifier(entity_id);
+"""
+
+
+def die(msg: str) -> "NoReturn":  # type: ignore[name-defined]
+    print(f"idmap: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def default_db() -> Path:
+    env = os.environ.get("IDMAP_DB")
+    if env:
+        return Path(env)
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(Path.home(), ".local", "share")
+    return Path(base) / "idmap" / "idmap.db"
+
+
+def connect(db: Path) -> sqlite3.Connection:
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.executescript(SCHEMA)
+    return conn
+
+
+def parse_ident(s: str) -> tuple[str, str]:
+    """Parse 'namespace:handle'. Namespace is lowercased; handle kept verbatim."""
+    if ":" not in s:
+        die(f"identifier must be 'namespace:handle', got {s!r}")
+    ns, handle = s.split(":", 1)
+    ns, handle = ns.strip().lower(), handle.strip()
+    if not ns or not handle:
+        die(f"identifier must be 'namespace:handle', got {s!r}")
+    return ns, handle
+
+
+def find_entity(conn: sqlite3.Connection, ns: str, handle: str) -> int | None:
+    row = conn.execute(
+        "SELECT entity_id FROM identifier WHERE namespace = ? AND handle = ?",
+        (ns, handle),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def prune_entity(conn: sqlite3.Connection, entity_id: int) -> None:
+    """Delete an entity that no longer has any identifiers."""
+    still = conn.execute(
+        "SELECT 1 FROM identifier WHERE entity_id = ? LIMIT 1", (entity_id,)
+    ).fetchone()
+    if not still:
+        conn.execute("DELETE FROM entity WHERE id = ?", (entity_id,))
+
+
+# --- commands ---------------------------------------------------------------
+
+
+def cmd_set(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+    idents = [parse_ident(x) for x in args.identifiers]
+
+    entity_ids: set[int] = set()
+    for ns, handle in idents:
+        eid = find_entity(conn, ns, handle)
+        if eid is not None:
+            entity_ids.add(eid)
+
+    if not entity_ids:
+        cur = conn.execute("INSERT INTO entity DEFAULT VALUES")
+        survivor = cur.lastrowid
+    else:
+        survivor = min(entity_ids)
+        losers = entity_ids - {survivor}
+        if losers:
+            # Preserve a name if the survivor lacks one but a merged entity has it.
+            surv_name = conn.execute(
+                "SELECT name FROM entity WHERE id = ?", (survivor,)
+            ).fetchone()[0]
+            for loser in losers:
+                if surv_name is None:
+                    loser_name = conn.execute(
+                        "SELECT name FROM entity WHERE id = ?", (loser,)
+                    ).fetchone()[0]
+                    if loser_name is not None:
+                        conn.execute(
+                            "UPDATE entity SET name = ? WHERE id = ?",
+                            (loser_name, survivor),
+                        )
+                        surv_name = loser_name
+                conn.execute(
+                    "UPDATE identifier SET entity_id = ? WHERE entity_id = ?",
+                    (survivor, loser),
+                )
+                conn.execute("DELETE FROM entity WHERE id = ?", (loser,))
+
+    for ns, handle in idents:
+        conn.execute(
+            "INSERT INTO identifier (namespace, handle, entity_id) VALUES (?, ?, ?) "
+            "ON CONFLICT(namespace, handle) DO UPDATE SET entity_id = excluded.entity_id",
+            (ns, handle, survivor),
+        )
+    conn.commit()
+    return 0
+
+
+def cmd_get(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+    ns, handle = parse_ident(args.identifier)
+    eid = find_entity(conn, ns, handle)
+    if eid is None:
+        return 1
+
+    if args.ns:
+        want = args.ns.strip().lower()
+        rows = conn.execute(
+            "SELECT handle FROM identifier WHERE entity_id = ? AND namespace = ? "
+            "ORDER BY handle",
+            (eid, want),
+        ).fetchall()
+        if not rows:
+            return 1
+        for (h,) in rows:
+            print(h)
+    else:
+        rows = conn.execute(
+            "SELECT namespace, handle FROM identifier WHERE entity_id = ? "
+            "ORDER BY namespace, handle",
+            (eid,),
+        ).fetchall()
+        for ns2, h2 in rows:
+            print(f"{ns2}:{h2}")
+    return 0
+
+
+def cmd_ls(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+    if args.ns:
+        want = args.ns.strip().lower()
+        for ns, handle in conn.execute(
+            "SELECT namespace, handle FROM identifier WHERE namespace = ? ORDER BY handle",
+            (want,),
+        ):
+            print(f"{ns}:{handle}")
+        return 0
+
+    for eid, name in conn.execute("SELECT id, name FROM entity ORDER BY id"):
+        idents = conn.execute(
+            "SELECT namespace, handle FROM identifier WHERE entity_id = ? "
+            "ORDER BY namespace, handle",
+            (eid,),
+        ).fetchall()
+        label = f" ({name})" if name else ""
+        joined = ", ".join(f"{ns}:{h}" for ns, h in idents)
+        print(f"#{eid}{label}: {joined}")
+    return 0
+
+
+def cmd_unlink(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+    ns, handle = parse_ident(args.identifier)
+    old = find_entity(conn, ns, handle)
+    if old is None:
+        die(f"no such identifier: {ns}:{handle}")
+    cur = conn.execute("INSERT INTO entity DEFAULT VALUES")
+    conn.execute(
+        "UPDATE identifier SET entity_id = ? WHERE namespace = ? AND handle = ?",
+        (cur.lastrowid, ns, handle),
+    )
+    prune_entity(conn, old)
+    conn.commit()
+    return 0
+
+
+def cmd_rm(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+    ns, handle = parse_ident(args.identifier)
+    eid = find_entity(conn, ns, handle)
+    if eid is None:
+        die(f"no such identifier: {ns}:{handle}")
+    conn.execute(
+        "DELETE FROM identifier WHERE namespace = ? AND handle = ?", (ns, handle)
+    )
+    prune_entity(conn, eid)
+    conn.commit()
+    return 0
+
+
+def cmd_name(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+    ns, handle = parse_ident(args.identifier)
+    eid = find_entity(conn, ns, handle)
+    if eid is None:
+        die(f"no such identifier: {ns}:{handle}")
+    conn.execute("UPDATE entity SET name = ? WHERE id = ?", (args.name, eid))
+    conn.commit()
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="idmap", description="Local identity-correlation store."
+    )
+    p.add_argument(
+        "-d", "--db", type=Path, default=None,
+        help="SQLite database path (default: $IDMAP_DB or XDG data dir).",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    s = sub.add_parser("set", help="Assert identifiers name the same person (union/merge).")
+    s.add_argument("identifiers", nargs="+", metavar="NS:HANDLE")
+    s.set_defaults(func=cmd_set)
+
+    g = sub.add_parser("get", help="Print a person's identifiers, or one namespace's handles.")
+    g.add_argument("identifier", metavar="NS:HANDLE")
+    g.add_argument("--ns", metavar="NAMESPACE", help="Print only handles in this namespace.")
+    g.set_defaults(func=cmd_get)
+
+    l = sub.add_parser("ls", help="List all people, or all handles in one namespace.")
+    l.add_argument("--ns", metavar="NAMESPACE")
+    l.set_defaults(func=cmd_ls)
+
+    u = sub.add_parser("unlink", help="Split an identifier off into its own person.")
+    u.add_argument("identifier", metavar="NS:HANDLE")
+    u.set_defaults(func=cmd_unlink)
+
+    r = sub.add_parser("rm", help="Delete an identifier.")
+    r.add_argument("identifier", metavar="NS:HANDLE")
+    r.set_defaults(func=cmd_rm)
+
+    n = sub.add_parser("name", help="Set a display name on an identifier's person.")
+    n.add_argument("identifier", metavar="NS:HANDLE")
+    n.add_argument("name", metavar="NAME")
+    n.set_defaults(func=cmd_name)
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    db = args.db or default_db()
+    conn = connect(db)
+    try:
+        return args.func(conn, args)
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
