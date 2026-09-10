@@ -46,6 +46,7 @@ idmap set ldap:asmith quay:alice-q gitlab:alice-gl
 idmap get ldap:asmith                 # github:alice, gitlab:alice-gl, ...
 idmap get ldap:asmith --ns github     # alice
 idmap get quay:alice-q --ns gitlab    # alice-gl
+idmap get ldap:asmith --name          # Alice Smith
 
 # Inspect.
 idmap ls                              # every person and their identifiers
@@ -58,7 +59,8 @@ idmap rm gitlab:alice-gl             # forget an identifier
 ```
 
 `get` prints nothing and exits non-zero when the identifier (or requested
-namespace) isn't known — convenient for shell callers.
+namespace, or a name that was never set) isn't known — convenient for shell
+callers.
 
 ## Schema
 

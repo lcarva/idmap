@@ -141,6 +141,13 @@ def cmd_get(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
     if eid is None:
         return 1
 
+    if args.name:
+        row = conn.execute("SELECT name FROM entity WHERE id = ?", (eid,)).fetchone()
+        if not row or row[0] is None:
+            return 1
+        print(row[0])
+        return 0
+
     if args.ns:
         want = args.ns.strip().lower()
         rows = conn.execute(
@@ -239,7 +246,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = sub.add_parser("get", help="Print a person's identifiers, or one namespace's handles.")
     g.add_argument("identifier", metavar="NS:HANDLE")
-    g.add_argument("--ns", metavar="NAMESPACE", help="Print only handles in this namespace.")
+    mx = g.add_mutually_exclusive_group()
+    mx.add_argument("--ns", metavar="NAMESPACE", help="Print only handles in this namespace.")
+    mx.add_argument("--name", action="store_true", help="Print only the person's name.")
     g.set_defaults(func=cmd_get)
 
     l = sub.add_parser("ls", help="List all people, or all handles in one namespace.")
