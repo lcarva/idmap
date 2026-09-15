@@ -25,6 +25,9 @@ The database is created on first use at `$IDMAP_DB`, or
 
 - An **identifier** is `namespace:handle`, e.g. `github:alice`, `ldap:asmith`,
   `quay:alice-q`. The namespace is lowercased; the handle is kept verbatim.
+- A **namespace** may have an associated URL, such as `github.com` or
+  `foo.my.corp.com.br`. The URL is stored exactly as supplied; idmap never
+  contacts it or otherwise interprets it.
 - A **person** (entity) is a cluster of identifiers that all refer to the same
   human. You never create a person explicitly — it appears the first time you
   name an identifier, and clusters **merge** automatically when you link two
@@ -50,6 +53,9 @@ idmap get ldap:asmith --name          # Alice Smith
 # Inspect.
 idmap ls                              # every person and their identifiers
 idmap ls --ns github                  # every github:* handle on record
+idmap namespace set github github.com  # associate a URL with a namespace
+idmap namespace get github             # print the stored URL
+idmap namespace ls                     # list namespaces and URLs
 
 # Labels and corrections.
 idmap name github:alice "Alice Smith"
@@ -60,4 +66,3 @@ idmap rm gitlab:alice-gl             # forget an identifier
 `get` prints nothing and exits non-zero when the identifier (or requested
 namespace, or a name that was never set) isn't known — convenient for shell
 callers.
-
