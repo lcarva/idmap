@@ -21,6 +21,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+__version__ = "0.1.0"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS entity (
   id   INTEGER PRIMARY KEY,
@@ -281,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="idmap", description="Local identity-correlation store."
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument(
         "-d", "--db", type=Path, default=None,
         help="SQLite database path (default: $IDMAP_DB or XDG data dir).",

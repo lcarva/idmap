@@ -1,19 +1,11 @@
 import contextlib
-import importlib.machinery
-import importlib.util
 import io
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-
-MODULE_PATH = Path(__file__).with_name("idmap")
-LOADER = importlib.machinery.SourceFileLoader("idmap", str(MODULE_PATH))
-SPEC = importlib.util.spec_from_loader("idmap", LOADER)
-assert SPEC is not None and SPEC.loader is not None
-idmap = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(idmap)
+import idmap
 
 
 class IdmapTestCase(unittest.TestCase):

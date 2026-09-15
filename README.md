@@ -11,10 +11,17 @@ backed by a single SQLite file. No network calls.
 
 ## Install
 
-Single file, standard library only (needs Python 3.10+):
+From PyPI (needs Python 3.10+):
 
 ```sh
-cp idmap ~/.local/bin/idmap    # anywhere on $PATH
+pip install idmap
+```
+
+Or, since it's a single file using only the standard library, drop it on your
+`$PATH` directly:
+
+```sh
+cp idmap.py ~/.local/bin/idmap    # anywhere on $PATH
 ```
 
 The database is created on first use at `$IDMAP_DB`, or
@@ -29,8 +36,17 @@ The project uses only Python's standard library. Run the full local check with:
 make ci
 ```
 
-This compiles the Python files and runs the unit tests. Individual checks are
-available with `make compile` and `make test`; running `make` lists all targets.
+This compiles the Python files, runs the unit tests, and builds the
+distribution artifacts, so a change that breaks packaging is caught early.
+Individual checks are available with `make compile`, `make test`, and
+`make build`; running `make` lists all targets.
+
+The `build` step needs the [build](https://build.pypa.io/) package
+(`pip install build`) and produces `dist/*.whl` and `dist/*.tar.gz`.
+
+Releases are published to PyPI automatically by GitHub Actions when a GitHub
+release is published (see `.github/workflows/publish.yml`), using PyPI
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/).
 
 ## Concepts
 
