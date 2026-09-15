@@ -21,6 +21,17 @@ The database is created on first use at `$IDMAP_DB`, or
 `${XDG_DATA_HOME:-~/.local/share}/idmap/idmap.db`. Override per-invocation with
 `--db PATH`.
 
+## Development
+
+The project uses only Python's standard library. Run the full local check with:
+
+```sh
+make ci
+```
+
+This compiles the Python files and runs the unit tests. Individual checks are
+available with `make compile` and `make test`; running `make` lists all targets.
+
 ## Concepts
 
 - An **identifier** is `namespace:handle`, e.g. `github:alice`, `ldap:asmith`,
